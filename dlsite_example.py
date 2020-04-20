@@ -1,6 +1,6 @@
 from dlsite_scraper import dlsite_scraper
 
-# Example 1: Scrap all results from a circle or search page. Have to mabually get the page yourself. Be sure dlsite results are
+# Example 1: Scrap all results from a circle or search page. Have to manually get the page yourself. Be sure dlsite results are
 # in tile format rather than list format in order to find the results.
 
 crawler = dlsite_scraper()
