@@ -2,6 +2,7 @@ import requests
 import csv
 import json
 import datetime
+import time
 from bs4 import BeautifulSoup as bs
 from selenium import webdriver 
 from selenium.webdriver.chrome.options import Options
@@ -10,7 +11,12 @@ from selenium.webdriver.common.keys import Keys
 from currency_converter import CurrencyConverter
 import concurrent.futures
 import traceback
+import psutil
+import objgraph
+import inspect
 
+import concurrent.futures
+import gc
 
 class dlsite_scraper:
 	"""
@@ -18,44 +24,60 @@ class dlsite_scraper:
 	"""
 	
 	def __init__(self):
+		self.start_time = time.time()
 		"""Initializes our webdriver."""
 		self.reload_counter = 0	
 		self.max_reloads = 2 # +1 is what we actual have, so 3 reloads total
 		# was running out of memory, so now I restart the driver once the page has
 		# been reloaded MAX_MEM_COUNT times.
-		self.MAX_MEM_COUNT = 35
+		self.MAX_MEM_COUNT = 100
 		self.mem_count = 0 # the current # of reloads
 
+		# was running out of ram so I used this.
+		# lower this # if you're running out of memory
+		self.MAX_STORAGE_VAL = 1000 
 
-		options = Options()
+		# default 5
+		# for multithreading?
+		# set to 1 if you want to scrape 1 page at a time.
+		self.MAX_WORKERS = 5
+
+		# headless mode is like 2-3x slower, but it allows me to use the pc. Probably a decent trade off?
+		options = webdriver.ChromeOptions()
+		# options.headless = True
+		# options.add_argument('--disable-gpu')
 		chrome_prefs = {}
-		# This makes it so images aren't downloaded
+
+
+		# This makes it so images aren't downloaded		
 		options.experimental_options["prefs"] = chrome_prefs
 		chrome_prefs["profile.default_content_settings"] = {"images": 2}
 		chrome_prefs["profile.managed_default_content_settings"] = {"images": 2}
 		self.options = options;
-		self.driver = webdriver.Chrome(options=options)
-		self.driver.set_page_load_timeout(10)
+		self.driver = webdriver.Chrome(options=self.options)
+		
+		#self.driver.set_page_load_timeout(10)
 
-	def load_url(self, full_url, single_url = False):
+	def load_url(self, full_url):
 		"""Pass a dlsite url to load it via the webdriver"""
+		self._track_memory()
 		self.url = full_url
 		url	= full_url
 		try:
 			self.driver.get(url)
+
 			source_code = self.driver.execute_script("return document.documentElement.outerHTML")
 		except:
+			print(self.url)
 			print("Error loading url")
-			#traceback.print_exc()
+			traceback.print_exc()
 			self._reload_driver()
 			self.load_url(self.url)
 		else:
 			self.soup = bs(source_code,features="lxml")
-			if (single_url == True):
-				self.driver.quit()
 
 	def _reload_driver(self):
-		print("Restarting driver")
+		##print("Restarting driver")
 		self.driver.quit()
 		self.mem_count = 0
 		self.driver = webdriver.Chrome(options = self.options)
@@ -69,10 +91,9 @@ class dlsite_scraper:
 
 	def _reload_page(self):
 		if (self.reload_counter <= self.max_reloads):
-			self._track_memory()
 			self.load_url(self.url)
 			self.driver.find_element_by_id("search_button").send_keys(Keys.F5)
-			print(f"we reloaded for {self.url}")
+			##print(f"\twe reloaded for {self.url}")
 			self.reload_counter += 1
 
 	def _make_keyword_string(self, list_keys):
@@ -99,15 +120,25 @@ class dlsite_scraper:
 		except:
 			print("Error retrieving search results")
 		else:
-			self.driver.quit()
 			return num_searches_found
 	
 
 	def get_seller_name(self):
-		for link in self.soup.findAll('span', {'class':'maker_name'}):
+		# try:
+		# 	result = self.driver.find_element_by_xpath('//*[@id="work_maker"]/tbody/tr/td/span/a')
+		# except:
+		# 	print('Error getting seller name')
+		# else:
+		# 	result = str(result.text)
+		# 	return result
+		results = self.soup.findAll('span', {'class':'maker_name'})
+		while(results ==[]):
+			self._reload_page()
+			results = self.soup.findAll('span', {'class':'maker_name'})
+		for link in results:
 			try:
 				for l in link.findAll('a',):
-					name = l.string
+					name = str(l.string)
 			except:
 				print("Error getting seller name")
 			else:
@@ -115,6 +146,7 @@ class dlsite_scraper:
 
 	
 	def get_rating(self):
+		
 		result_set = self.soup.findAll('span',{'class':'average_count'})
 		if(result_set == []):
 			self._reload_page()
@@ -132,38 +164,57 @@ class dlsite_scraper:
 				print("Error getting rating")
 			else:
 				self.reload_counter = 0				
-				return rating
+				return float(rating)
 
 
 	def get_sale_date(self):
+		# try:
+		# 	result = self.driver.find_element_by_xpath('//*[@id="work_outline"]/tbody/tr[1]/td/a')
+		# except:
+		# 	print('Error getting release date')
+		# else:
+		# 	result = str(result.text)
+		# 	return result
 		for link in self.soup.findAll('table',{'id':'work_outline'}):
 			try:
 				data = link.findAll('a',)[0].string
 			except:
 				print("Error getting release date")
 			else:
-				return data
+				return str(data)
 
 	def get_genres(self):
-		list_of_genres = []
+		genre_string = ''
 		for link in self.soup.findAll('div',{'class':'main_genre'}):
 			try:
 				for l in link.findAll('a',):
-					list_of_genres.append(l.string) 
+					genre_string += f'{str(l.string)} '
+					#list_of_genres.append(l.string) 
 			except:
 				print("Error getting genres")
 				pass
 			else:
-				return list_of_genres
+				return genre_string
 
 	def get_name(self):
-		for link in self.soup.findAll('a',{'itemprop':'url'}):
+		# try:
+		# 	result = self.driver.find_element_by_xpath('//*[@id="work_name"]/a')
+		# except:
+		# 	print('Error getting release date')
+		# else:
+		# 	result = str(result.text)
+		# 	return result
+		results = self.soup.findAll('a',{'itemprop':'url'})
+		while(results == []):
+			self._reload_page()
+			results = self.soup.findAll('a',{'itemprop':'url'})	
+		for link in results:
 			try:
 				name = link.contents[0] 
 			except:
 				print("Error getting name")
 			else:
-				return name
+				return str(name)
 
 	def get_sales(self):
 		result_set = self.soup.findAll('dl', {'class':'work_dl purchase'})
@@ -184,7 +235,7 @@ class dlsite_scraper:
 				print("Error getting sales")
 			else:
 				self.reload_counter = 0
-				return sales
+				return int(sales)
 
 	def get_total_earnings_jp(self):
 		return self.get_sales() * self.get_price()
@@ -206,9 +257,9 @@ class dlsite_scraper:
 				else: 
 					self.reload_counter = 0
 					return 0
-				print("Error getting price")
+				##print("Error getting price")
 			else:
-				return price
+				return int(price)
 
 	def print_all_data(self):
 		print(f"Name: {self.get_name()}")
@@ -227,154 +278,134 @@ class dlsite_scraper:
 		print("---")
 		print(f"List of genres: {self.get_genres()}")
 
+
+	def _find_all_pages(self):
+		b_one_page = True
+		for link in self.soup.findAll('td', {'class':'page_no'}):
+		    #print(link)
+		    for l in link.findAll('a'):
+		        
+		        if(l.contents[0] == '最後へ'):
+		            b_one_page = False
+		            last_page_url = l.get('href')
+		            
+		            ex_url = last_page_url
+		            pg_str = '/page/'
+		            page_index = ex_url.find(pg_str)
+		            ex_url = ex_url[:page_index + len(pg_str)]
+		            last_url_ind = last_page_url[page_index + len(pg_str):].replace('#works','')
+		if(b_one_page == False):
+		    all_pages = []
+		    for v in range(1,int(last_url_ind) + 1):
+		        all_pages.append(ex_url + str(v))
+		    return all_pages
+
+		return [self.url]
+
+	def _get_all_works_a_page(self, l):
+		myS = dlsite_scraper()
+		myS.load_url(l)
+		all_works = []
+		for link in myS.soup.findAll('div', {'class':'multiline_truncate'}):
+			for l in link.findAll('a',):
+				hrefl = l.get('href')
+				all_works.append(hrefl)
+		myS.driver.quit()
+		return all_works
+		
+	def get_all_works_from_pages(self):
+		list_of_works = []
+		all_pages = self._find_all_pages()    
+
+		with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
+			results = [ex.submit(self._get_all_works_a_page,l) for l in all_pages]
+
+			for k in concurrent.futures.as_completed(results):
+				list_of_works += k.result()
+
+		return list_of_works
+		
+	
+	
 	def data_as_list(self):
 		"""Puts all data from a url into a list"""
 		all_values = []
 		all_values.append(self.get_name())
-		all_values.append(self.url)
 		all_values.append(self.get_seller_name())
 		all_values.append(self.get_price())
 		all_values.append(self.get_sales())
 		all_values.append(self.get_sale_date())
+		all_values.append(all_values[-1][5:7])
+		all_values.append(all_values[-2][:4])
 		all_values.append(self.get_rating())
 		all_values.append(self.get_genres())
+		rj_start_ind = self.url.find("J")
+		rj_html_ind = self.url.find(".html")
+		rj_substring = self.url[rj_start_ind-1:rj_html_ind]
+		all_values.append(rj_substring)
+		
 		return all_values
-
-	def data_as_dict(self):
-		"""Puts all data from a url into a dictionary"""
-		dict_return = {}
-		dict_return['name'] = self.get_name()
-		dict_return['url'] = self.url
-		dict_return['seller_name'] = self.get_seller_name()
-		dict_return['price'] = self.get_price()
-		dict_return['sales'] = self.get_sales()
-		dict_return['sale_date'] = self.get_sale_date()
-		dict_return['rating'] = self.get_rating()
-		dict_return['genre'] = self.get_genres()
-
-		return dict_return
-
-	def create_data_dict(self, listval):
-		"""Creates a dictionary entry from a value called listval and appends data that is not already given"""
-		self.load_url(listval)
-		data_dict = self.data_as_dict()
-
-		rj_start_ind = listval.find("RJ")
-		if(rj_start_ind == -1):
-			rj_start_ind = listval.find("VJ")
-		rj_html_ind = listval.find(".html")
-		rj_substring = listval[rj_start_ind:rj_html_ind]
-		data_dict['code'] = rj_substring
-		recording_time = datetime.datetime.now()
-		formatted_time = recording_time.strftime("%Y-%m-%d")
-
-		data_dict['recording_time'] = formatted_time
-		return data_dict
-
-	def save_as_json(self, filename):
-		fname = f"{filename}.json"
-		list_of_works = self.get_multiple_from_page()
-
-
-		# create list to be saved. We need this to be create data dict
-		list_of_works_as_dict = {}
-		dict_counter = 0
-		for l in list_of_works:
-			print (f'progress = {list_of_works.index(l) + 1} / {len(list_of_works)}')
-			list_of_works_as_dict[dict_counter] = self.create_data_dict(l)
-			self._track_memory()
-			dict_counter += 1
-
-		with open(fname, 'w', newline='', encoding='utf-16') as f:
-			json.dump(list_of_works_as_dict, f)
-		self.driver.quit()
-
-	def _find_next_page(self, current_page):
-		page_info = []
-		for link in self.soup.findAll('td', {'class':'page_no'}):
-			for l in link.findAll('a',{'data-value' : str(current_page+1)}):
-				print(l)
-				print('---')
-				d_val = None
-				if (l.get('data-value') != None):
-					d_val = int(l.get('data-value'))
-		
-				if ( d_val > int(current_page)):
-					page_info.append(l.get('href'))
-					page_info.append(int(l.string))
-					return page_info
-			return [1,1] 
-		return [1,1]
-		
-
-	def get_multiple_from_page(self):
-		count = 0
-		list_of_works = []
-		current_page = 1
-
-		page_info = self._find_next_page(current_page)
-
-		while(current_page <= page_info[1]):
-			for link in self.soup.findAll('div', {'class':'multiline_truncate'}):
-				for l in link.findAll('a',):
-					hrefl = l.get('href')
-					list_of_works.append(hrefl)
-				count += 1
-			current_page += 1
-			if(page_info[0] == 1):
-				current_page += 1
-			else:
-				self.load_url(page_info[0])
-			new_page_info = self._find_next_page(current_page)
-			if (new_page_info[0] != 1):
-				page_info = new_page_info
-
-		print(f"found {count} items")	
-		return list_of_works
-		
-	def save_multiple_from_search(self, keywords, file_name="untitled", filetype_passed='json'):
-		self.get_total_search_res(keywords)
-		self.save_data_multiple(filename = file_name, filetype=filetype_passed)
-
-	def save_multiple_from_url(self, url, name_of_file = "untitlted", filetype_passed='json'):
-		self.load_url(url)
-		self.save_data_multiple(filename=name_of_file, filetype=filetype_passed)
 
 	def create_data_list(self,listval):
 		self.load_url(listval)
 		data_list = self.data_as_list()
-		rj_start_ind = listval.find("RJ")
-		if(rj_start_ind == -1):
-			rj_start_ind = listval.find("VJ")
-		rj_html_ind = listval.find(".html")
-		rj_substring = listval[rj_start_ind:rj_html_ind]
-		data_list.append(rj_substring)
+		
+		
 		recording_time = datetime.datetime.now()
 		formatted_time = recording_time.strftime("%Y-%m-%d")
-
 		data_list.append(formatted_time)
 		return(data_list)
 
+
+	def _rename_later(self, l, list_of_works, list_of_scrapers):
+		scraper_ind = -1
+
+		while(scraper_ind == -1):
+			for scraper in list_of_scrapers:
+				if(scraper[1] == False):
+					scraper_ind = list_of_scrapers.index(scraper)
+					scraper[1] = True
+					k = scraper[0].create_data_list(l)
+					break;
+		
+		list_of_scrapers[scraper_ind][0].soup.decompose()
+		list_of_scrapers[scraper_ind][1] = False
+		return k
+
 	def save_as_csv(self, filename):
 		fname = f"{filename}.csv"
-		list_of_works = self.get_multiple_from_page()
+		list_of_works = self.get_all_works_from_pages()
 
-		list_of_works_as_lists = []
-		for l in list_of_works:
-			print (f'progress = {list_of_works.index(l) + 1 } / {len(list_of_works)}')
-			list_of_works_as_lists.append(self.create_data_list(l))
-			self._track_memory()
-
-		with open(fname, 'w', newline='', encoding='utf-16') as f:
+		with open(fname, 'w', newline='', encoding= 'utf-8') as f:
 			writer = csv.writer(f)
-			headersf = ['name','url','seller name', 'price','sales','release date','rating','genres','code','data recording date']
+			
+			headersf = ['name','seller name', 'price','sales','release date','release month', 'release year', 'rating','genres', 'code','data recording date']
 			writer.writerow(headersf)
-			for r in list_of_works_as_lists:
-					writer.writerow(r)
-		self.driver.quit()
+
+		list_of_scrapers =  [[] for x in range(0,self.MAX_WORKERS)]
+		for i in range(0, self.MAX_WORKERS):
+			list_of_scrapers[i]  = [dlsite_scraper(), False]
+
+		with open(fname, 'a', newline='', encoding= 'utf-8') as f:
+			writer = csv.writer(f)
+			self.driver.quit()
+			with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
+				results = [ex.submit(self._rename_later,l, list_of_works, list_of_scrapers) for l in list_of_works]
+
+				for k in concurrent.futures.as_completed(results):
+					writer.writerow(k.result())
+					results.remove(k)
+		#objgraph.show_most_common_types()
+		print(time.time() - self.start_time)
 
 	def save_data_multiple(self, filetype="csv", filename="untitled"):
 		if(filetype == "csv"):
 			self.save_as_csv(filename)
-		elif(filetype == 'json'):
-			self.save_as_json(filename)
+			
+	def save_multiple_from_search(self, keywords, file_name="untitled", filetype_passed='csv'):
+		self.get_total_search_res(keywords)
+		self.save_data_multiple(filename = file_name, filetype=filetype_passed)
+
+	def save_multiple_from_url(self, url, name_of_file = "untitlted", filetype_passed='csv'):
+		self.load_url(url)
+		self.save_data_multiple(filename=name_of_file, filetype=filetype_passed)
