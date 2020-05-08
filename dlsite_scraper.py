@@ -30,7 +30,7 @@ class dlsite_scraper:
 		self.max_reloads = 2 # +1 is what we actual have, so 3 reloads total
 		# was running out of memory, so now I restart the driver once the page has
 		# been reloaded MAX_MEM_COUNT times.
-		self.MAX_MEM_COUNT = 100
+		self.MAX_MEM_COUNT = 50
 		self.mem_count = 0 # the current # of reloads
 
 		# was running out of ram so I used this.
@@ -55,6 +55,7 @@ class dlsite_scraper:
 		chrome_prefs["profile.managed_default_content_settings"] = {"images": 2}
 		self.options = options;
 		self.driver = webdriver.Chrome(options=self.options)
+		self.bVoiceWorks = False;
 		
 		#self.driver.set_page_load_timeout(10)
 
@@ -92,7 +93,11 @@ class dlsite_scraper:
 	def _reload_page(self):
 		if (self.reload_counter <= self.max_reloads):
 			self.load_url(self.url)
-			self.driver.find_element_by_id("search_button").send_keys(Keys.F5)
+			try:
+				self.driver.find_element_by_id("search_button").send_keys(Keys.F5)
+			except:
+				self._reload_driver()
+				self._reload_page()
 			##print(f"\twe reloaded for {self.url}")
 			self.reload_counter += 1
 
@@ -124,13 +129,6 @@ class dlsite_scraper:
 	
 
 	def get_seller_name(self):
-		# try:
-		# 	result = self.driver.find_element_by_xpath('//*[@id="work_maker"]/tbody/tr/td/span/a')
-		# except:
-		# 	print('Error getting seller name')
-		# else:
-		# 	result = str(result.text)
-		# 	return result
 		results = self.soup.findAll('span', {'class':'maker_name'})
 		while(results ==[]):
 			self._reload_page()
@@ -168,13 +166,6 @@ class dlsite_scraper:
 
 
 	def get_sale_date(self):
-		# try:
-		# 	result = self.driver.find_element_by_xpath('//*[@id="work_outline"]/tbody/tr[1]/td/a')
-		# except:
-		# 	print('Error getting release date')
-		# else:
-		# 	result = str(result.text)
-		# 	return result
 		for link in self.soup.findAll('table',{'id':'work_outline'}):
 			try:
 				data = link.findAll('a',)[0].string
@@ -195,15 +186,24 @@ class dlsite_scraper:
 				pass
 			else:
 				return genre_string
+	def get_maker_code(self):
+		results = self.soup.findAll('span', {"class":"maker_name"})
+		for link in results:
+			ahref = link.findAll('a',)
+			for l in ahref:
+				try:
+					code = l.get('href')
+					code = str(code)
+					code_start_ind = code.index('G')
+					code_end_ind = code.index('.html')
+					maker_code = code[int(code_start_ind) - 1 : int(code_end_ind)]
+				except:
+					print("error getting maker code")
+					traceback.print_exc()
+				else:
+					return maker_code
 
 	def get_name(self):
-		# try:
-		# 	result = self.driver.find_element_by_xpath('//*[@id="work_name"]/a')
-		# except:
-		# 	print('Error getting release date')
-		# else:
-		# 	result = str(result.text)
-		# 	return result
 		results = self.soup.findAll('a',{'itemprop':'url'})
 		while(results == []):
 			self._reload_page()
@@ -261,6 +261,32 @@ class dlsite_scraper:
 			else:
 				return int(price)
 
+
+	def getCVs(self):
+		'''Dont use. The CV arent always credited'''
+		bCVfound = False
+		foundString = ""
+		for link in self.soup.findAll('table',{'id':'work_outline'}):
+			try:
+				for l in link.findAll('tr',):
+					for al in l.findAll('th'):
+						if(al.contents[0] == '声優'):
+							bCVfound = True
+						else:
+							bCVfound = False
+					if(bCVfound == True):
+						for lk in l.findAll('a'):
+							print(lk)
+							foundString = foundString + " " + str(lk.contents[0])
+						bCVfound = False
+			except:
+				traceback.print_exc()
+				print("Error getting CVs")
+			else:
+				foundString = foundString.lstrip()
+				print('found' + foundString)
+				return foundString
+
 	def print_all_data(self):
 		print(f"Name: {self.get_name()}")
 		print("---")
@@ -282,7 +308,6 @@ class dlsite_scraper:
 	def _find_all_pages(self):
 		b_one_page = True
 		for link in self.soup.findAll('td', {'class':'page_no'}):
-		    #print(link)
 		    for l in link.findAll('a'):
 		        
 		        if(l.contents[0] == '最後へ'):
@@ -302,23 +327,33 @@ class dlsite_scraper:
 
 		return [self.url]
 
-	def _get_all_works_a_page(self, l):
-		myS = dlsite_scraper()
-		myS.load_url(l)
-		all_works = []
-		for link in myS.soup.findAll('div', {'class':'multiline_truncate'}):
-			for l in link.findAll('a',):
-				hrefl = l.get('href')
-				all_works.append(hrefl)
-		myS.driver.quit()
+	def _get_all_works_a_page(self, url, list_of_scrapers):
+		scraper_ind = -1
+
+		while(scraper_ind == -1):
+			for scraper in list_of_scrapers:
+				if(scraper[1] == False):
+					scraper_ind = list_of_scrapers.index(scraper)
+					scraper[1] = True
+					all_works = []
+					scraper[0].load_url(url)
+					for link in scraper[0].soup.findAll('div', {'class':'multiline_truncate'}):
+						for l in link.findAll('a',):
+							hrefl = l.get('href')
+							all_works.append(hrefl)
+					break;
+		
+		list_of_scrapers[scraper_ind][0].soup.decompose()
+		list_of_scrapers[scraper_ind][1] = False
 		return all_works
 		
-	def get_all_works_from_pages(self):
+	def get_all_works_from_pages(self, list_of_scrapers):
 		list_of_works = []
 		all_pages = self._find_all_pages()    
 
+
 		with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
-			results = [ex.submit(self._get_all_works_a_page,l) for l in all_pages]
+			results = [ex.submit(self._get_all_works_a_page,l, list_of_scrapers) for l in all_pages]
 
 			for k in concurrent.futures.as_completed(results):
 				list_of_works += k.result()
@@ -334,6 +369,8 @@ class dlsite_scraper:
 		all_values.append(self.get_seller_name())
 		all_values.append(self.get_price())
 		all_values.append(self.get_sales())
+		if(self.bVoiceWorks == True):
+			all_values.append(self.getCVs())
 		all_values.append(self.get_sale_date())
 		all_values.append(all_values[-1][5:7])
 		all_values.append(all_values[-2][:4])
@@ -343,7 +380,7 @@ class dlsite_scraper:
 		rj_html_ind = self.url.find(".html")
 		rj_substring = self.url[rj_start_ind-1:rj_html_ind]
 		all_values.append(rj_substring)
-		
+		all_values.append(self.get_maker_code())
 		return all_values
 
 	def create_data_list(self,listval):
@@ -374,17 +411,25 @@ class dlsite_scraper:
 
 	def save_as_csv(self, filename):
 		fname = f"{filename}.csv"
-		list_of_works = self.get_all_works_from_pages()
+
+		list_of_scrapers = []
+		with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
+			results = [ex.submit(dlsite_scraper) for l in range(0,self.MAX_WORKERS)]
+
+			for k in concurrent.futures.as_completed(results):
+				list_of_scrapers.append([k.result(), False])
+
+		list_of_works = self.get_all_works_from_pages(list_of_scrapers)
 
 		with open(fname, 'w', newline='', encoding= 'utf-8') as f:
 			writer = csv.writer(f)
 			
-			headersf = ['name','seller name', 'price','sales','release date','release month', 'release year', 'rating','genres', 'code','data recording date']
+			if(self.bVoiceWorks == True):
+				headersf = ['name','seller name', 'price','sales','CVs', 'release date','release month', 'release year', 'rating','genres', 'code', 'maker code','data recording date']
+			else:
+				headersf = ['name','seller name', 'price','sales','release date','release month', 'release year', 'rating','genres', 'code', 'maker code','data recording date']
 			writer.writerow(headersf)
 
-		list_of_scrapers =  [[] for x in range(0,self.MAX_WORKERS)]
-		for i in range(0, self.MAX_WORKERS):
-			list_of_scrapers[i]  = [dlsite_scraper(), False]
 
 		with open(fname, 'a', newline='', encoding= 'utf-8') as f:
 			writer = csv.writer(f)
@@ -395,7 +440,6 @@ class dlsite_scraper:
 				for k in concurrent.futures.as_completed(results):
 					writer.writerow(k.result())
 					results.remove(k)
-		#objgraph.show_most_common_types()
 		print(time.time() - self.start_time)
 
 	def save_data_multiple(self, filetype="csv", filename="untitled"):
