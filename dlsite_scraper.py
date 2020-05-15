@@ -180,12 +180,12 @@ class dlsite_scraper:
 			try:
 				for l in link.findAll('a',):
 					genre_string += f'{str(l.string)} '
-					#list_of_genres.append(l.string) 
 			except:
 				print("Error getting genres")
 				pass
 			else:
 				return genre_string
+
 	def get_maker_code(self):
 		results = self.soup.findAll('span', {"class":"maker_name"})
 		for link in results:
@@ -217,7 +217,7 @@ class dlsite_scraper:
 				return str(name)
 
 	def get_sales(self):
-		result_set = self.soup.findAll('dl', {'class':'work_dl purchase'})
+		result_set = self.soup.findAll('dd', {'class':'point'})
 		if(result_set == []):
 			self._reload_page()
 			if (self.reload_counter <= self.max_reloads):
@@ -227,10 +227,7 @@ class dlsite_scraper:
 				return 0
 		for link in result_set: 
 			try:
-				res2 = link.findAll('dd' , {'class' : 'count'})
-			
-				for r in res2:
-					sales = r.string.replace(',','')
+				sales = link.string.replace(',','')
 			except:
 				print("Error getting sales")
 			else:
@@ -257,35 +254,9 @@ class dlsite_scraper:
 				else: 
 					self.reload_counter = 0
 					return 0
-				##print("Error getting price")
 			else:
 				return int(price)
 
-
-	def getCVs(self):
-		'''Dont use. The CV arent always credited'''
-		bCVfound = False
-		foundString = ""
-		for link in self.soup.findAll('table',{'id':'work_outline'}):
-			try:
-				for l in link.findAll('tr',):
-					for al in l.findAll('th'):
-						if(al.contents[0] == '声優'):
-							bCVfound = True
-						else:
-							bCVfound = False
-					if(bCVfound == True):
-						for lk in l.findAll('a'):
-							print(lk)
-							foundString = foundString + " " + str(lk.contents[0])
-						bCVfound = False
-			except:
-				traceback.print_exc()
-				print("Error getting CVs")
-			else:
-				foundString = foundString.lstrip()
-				print('found' + foundString)
-				return foundString
 
 	def print_all_data(self):
 		print(f"Name: {self.get_name()}")
@@ -349,8 +320,7 @@ class dlsite_scraper:
 		
 	def get_all_works_from_pages(self, list_of_scrapers):
 		list_of_works = []
-		all_pages = self._find_all_pages()    
-
+		all_pages = self._find_all_pages()  
 
 		with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
 			results = [ex.submit(self._get_all_works_a_page,l, list_of_scrapers) for l in all_pages]
@@ -411,7 +381,6 @@ class dlsite_scraper:
 
 	def save_as_csv(self, filename):
 		fname = f"{filename}.csv"
-
 		list_of_scrapers = []
 		with concurrent.futures.ThreadPoolExecutor(max_workers = self.MAX_WORKERS) as ex:
 			results = [ex.submit(dlsite_scraper) for l in range(0,self.MAX_WORKERS)]
